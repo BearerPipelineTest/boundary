@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/boundary/internal/auth/oidc"
 	"github.com/hashicorp/boundary/internal/gen/controller/api/services"
 	authpb "github.com/hashicorp/boundary/internal/gen/controller/auth"
+	opsservices "github.com/hashicorp/boundary/internal/gen/controller/ops/services"
 	"github.com/hashicorp/boundary/internal/observability/event"
 	"github.com/hashicorp/boundary/internal/servers/common"
 	"github.com/hashicorp/boundary/internal/servers/controller/auth"
@@ -27,6 +28,7 @@ import (
 	"github.com/hashicorp/boundary/internal/servers/controller/handlers/credentiallibraries"
 	"github.com/hashicorp/boundary/internal/servers/controller/handlers/credentialstores"
 	"github.com/hashicorp/boundary/internal/servers/controller/handlers/groups"
+	"github.com/hashicorp/boundary/internal/servers/controller/handlers/health"
 	"github.com/hashicorp/boundary/internal/servers/controller/handlers/host_catalogs"
 	"github.com/hashicorp/boundary/internal/servers/controller/handlers/host_sets"
 	"github.com/hashicorp/boundary/internal/servers/controller/handlers/hosts"
@@ -72,6 +74,14 @@ func (c *Controller) apiHandler(props HandlerProperties) (http.Handler, error) {
 	eventsHandler, err := common.WrapWithEventsHandler(printablePathCheckHandler, c.conf.Eventer, c.kms, props.ListenerConfig)
 
 	return eventsHandler, err
+}
+
+func (c *Controller) registerGrpcHealthService(s *grpc.Server) {
+	if _, ok := s.GetServiceInfo()[opsservices.HealthService_ServiceDesc.ServiceName]; !ok {
+		hs, f := health.NewService()
+		c.startServiceUnavailableReplies = f
+		opsservices.RegisterHealthServiceServer(s, hs)
+	}
 }
 
 func (c *Controller) registerGrpcServices(ctx context.Context, s *grpc.Server) error {

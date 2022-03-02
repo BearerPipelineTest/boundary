@@ -60,6 +60,10 @@ type Controller struct {
 	apiGrpcServerListener grpcServerListener
 	apiGrpcGatewayTicket  string
 
+	// Used to signal the Health Service to start
+	// replying to queries with "503 Service Unavailable".
+	startServiceUnavailableReplies func()
+
 	// Repo factory methods
 	AuthTokenRepoFn       common.AuthTokenRepoFactory
 	VaultCredentialRepoFn common.VaultCredentialRepoFactory

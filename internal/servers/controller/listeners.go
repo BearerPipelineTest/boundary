@@ -34,6 +34,7 @@ func (c *Controller) startListeners() error {
 	if err != nil {
 		return fmt.Errorf("failed to register grpc services: %w", err)
 	}
+	c.registerGrpcHealthService(c.apiGrpcServer)
 
 	c.apiGrpcServerListener = newGrpcServerListener()
 	servers = append(servers, func() {
