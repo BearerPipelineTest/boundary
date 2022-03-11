@@ -337,7 +337,7 @@ func (c *Command) Run(args []string) int {
 			}
 		}
 	}
-	if err := c.SetupListeners(c.UI, c.Config.SharedConfig, []string{"api", "cluster", "proxy"}); err != nil {
+	if err := c.SetupListeners(c.UI, c.Config.SharedConfig, []string{"api", "cluster", "proxy", "ops"}); err != nil {
 		c.UI.Error(err.Error())
 		return base.CommandUserError
 	}

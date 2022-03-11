@@ -156,6 +156,35 @@ func TestControllerNewListenerConfig(t *testing.T) {
 			expErr:    true,
 			expErrMsg: `found listener with multiple purposes "api,cluster"`,
 		},
+		{
+			name: "ops listeners are accepted and stored correctly",
+			listeners: []*base.ServerListener{
+				{
+					Config: &listenerutil.ListenerConfig{
+						Purpose: []string{"api"},
+					},
+				},
+				{
+					Config: &listenerutil.ListenerConfig{
+						Purpose: []string{"cluster"},
+					},
+				},
+				{
+					Config: &listenerutil.ListenerConfig{
+						Purpose: []string{"ops"},
+					},
+				},
+				{
+					Config: &listenerutil.ListenerConfig{
+						Purpose: []string{"ops"},
+					},
+				},
+			},
+			expErr: false,
+			assertions: func(t *testing.T, c *Controller) {
+				require.Len(t, c.opsListeners, 2)
+			},
+		},
 	}
 
 	for _, tt := range tests {

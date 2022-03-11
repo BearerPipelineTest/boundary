@@ -76,6 +76,15 @@ func (c *Controller) apiHandler(props HandlerProperties) (http.Handler, error) {
 	return eventsHandler, err
 }
 
+func (c *Controller) opsHandler(props HandlerProperties) (http.Handler, error) {
+	mux := http.NewServeMux()
+
+	wrappedHandler := wrapHandlerWithCors(mux, props)
+	wrappedHandler = wrapHandlerWithCommonFuncs(wrappedHandler, c, props)
+	wrappedHandler = cleanhttp.PrintablePathCheckHandler(wrappedHandler, nil)
+	return common.WrapWithEventsHandler(wrappedHandler, c.conf.Eventer, c.kms, props.ListenerConfig)
+}
+
 func (c *Controller) registerGrpcHealthService(s *grpc.Server) {
 	if _, ok := s.GetServiceInfo()[opsservices.HealthService_ServiceDesc.ServiceName]; !ok {
 		hs, f := health.NewService()

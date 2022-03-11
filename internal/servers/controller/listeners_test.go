@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/boundary/internal/cmd/base"
+	"github.com/hashicorp/boundary/internal/cmd/config"
 	"github.com/hashicorp/boundary/internal/libs/alpnmux"
 	"github.com/hashicorp/go-secure-stdlib/base62"
 	"github.com/hashicorp/go-secure-stdlib/configutil"
@@ -34,7 +35,7 @@ func TestStartListeners(t *testing.T) {
 		name       string
 		setup      func(t *testing.T)
 		listeners  []*listenerutil.ListenerConfig
-		assertions func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string)
+		assertions func(t *testing.T, c *Controller, apiAddrs, opsAddrs []string, clusterAddr string)
 	}{
 		{
 			name: "one api, one cluster listener",
@@ -51,7 +52,7 @@ func TestStartListeners(t *testing.T) {
 					Address: "127.0.0.1:0",
 				},
 			},
-			assertions: func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string) {
+			assertions: func(t *testing.T, c *Controller, apiAddrs, _ []string, clusterAddr string) {
 				rsp, err := http.Get("http://" + apiAddrs[0] + "/v1/auth-methods?scope_id=global")
 				require.NoError(t, err)
 				require.Equal(t, http.StatusOK, rsp.StatusCode)
@@ -80,7 +81,7 @@ func TestStartListeners(t *testing.T) {
 					Address: "127.0.0.1:0",
 				},
 			},
-			assertions: func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string) {
+			assertions: func(t *testing.T, c *Controller, apiAddrs, _ []string, clusterAddr string) {
 				for _, apiAddr := range apiAddrs {
 					rsp, err := http.Get("http://" + apiAddr + "/v1/auth-methods?scope_id=global")
 					require.NoError(t, err)
@@ -107,7 +108,7 @@ func TestStartListeners(t *testing.T) {
 					Address: "127.0.0.1:0",
 				},
 			},
-			assertions: func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string) {
+			assertions: func(t *testing.T, c *Controller, apiAddrs, _ []string, clusterAddr string) {
 				client := testTlsHttpClient(t, "./boundary-startlistenerstest.cert")
 				rsp, err := client.Get("https://" + apiAddrs[0] + "/v1/auth-methods?scope_id=global")
 				require.NoError(t, err)
@@ -143,7 +144,7 @@ func TestStartListeners(t *testing.T) {
 					Address: "127.0.0.1:0",
 				},
 			},
-			assertions: func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string) {
+			assertions: func(t *testing.T, c *Controller, apiAddrs, _ []string, clusterAddr string) {
 				for i, apiAddr := range apiAddrs {
 					client := testTlsHttpClient(t, "./boundary-startlistenerstest"+strconv.Itoa(i)+".cert")
 					rsp, err := client.Get("https://" + apiAddr + "/v1/auth-methods?scope_id=global")
@@ -169,7 +170,7 @@ func TestStartListeners(t *testing.T) {
 					Address: "/tmp/boundary-listener-test-cluster.sock",
 				},
 			},
-			assertions: func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string) {
+			assertions: func(t *testing.T, c *Controller, apiAddrs, _ []string, clusterAddr string) {
 				conn, err := net.Dial("unix", apiAddrs[0])
 				require.NoError(t, err)
 
@@ -207,7 +208,7 @@ func TestStartListeners(t *testing.T) {
 					Address: "/tmp/boundary-listener-test-cluster.sock",
 				},
 			},
-			assertions: func(t *testing.T, c *Controller, apiAddrs []string, clusterAddr string) {
+			assertions: func(t *testing.T, c *Controller, apiAddrs, _ []string, clusterAddr string) {
 				for _, apiAddr := range apiAddrs {
 					conn, err := net.Dial("unix", apiAddr)
 					require.NoError(t, err)
@@ -226,6 +227,179 @@ func TestStartListeners(t *testing.T) {
 				clusterGrpcDialNoError(t, c, "unix", clusterAddr)
 			},
 		},
+		{
+			name: "one api, one cluster, one ops listener",
+			listeners: []*listenerutil.ListenerConfig{
+				{
+					Type:       "tcp",
+					Purpose:    []string{"api"},
+					Address:    "127.0.0.1:0",
+					TLSDisable: true,
+				},
+				{
+					Type:    "tcp",
+					Purpose: []string{"cluster"},
+					Address: "127.0.0.1:0",
+				},
+				{
+					Type:       "tcp",
+					Purpose:    []string{"ops"},
+					Address:    "127.0.0.1:0",
+					TLSDisable: true,
+				},
+			},
+			assertions: func(t *testing.T, c *Controller, apiAddrs, opsAddrs []string, clusterAddr string) {
+				rsp, err := http.Get("http://" + apiAddrs[0] + "/v1/auth-methods?scope_id=global")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+				clusterGrpcDialNoError(t, c, "tcp", clusterAddr)
+
+				_, err = http.Get("http://" + opsAddrs[0])
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "one api (unix socket), one cluster, one ops listener (unix socket)",
+			listeners: []*listenerutil.ListenerConfig{
+				{
+					Type:       "unix",
+					Purpose:    []string{"api"},
+					Address:    "/tmp/boundary-listener-test-api.sock",
+					TLSDisable: true,
+				},
+				{
+					Type:    "tcp",
+					Purpose: []string{"cluster"},
+					Address: "127.0.0.1:0",
+				},
+				{
+					Type:       "unix",
+					Purpose:    []string{"ops"},
+					Address:    "/tmp/boundary-listener-test-ops.sock",
+					TLSDisable: true,
+				},
+			},
+			assertions: func(t *testing.T, c *Controller, apiAddrs, opsAddrs []string, clusterAddr string) {
+				conn, err := net.Dial("unix", apiAddrs[0])
+				require.NoError(t, err)
+
+				cl := http.Client{
+					Transport: &http.Transport{
+						Dial: func(network, addr string) (net.Conn, error) { return conn, nil },
+					},
+				}
+				rsp, err := cl.Get("http://randomdomain.boundary/v1/auth-methods?scope_id=global")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+				require.NoError(t, conn.Close())
+
+				clusterGrpcDialNoError(t, c, "tcp", clusterAddr)
+
+				conn, err = net.Dial("unix", opsAddrs[0])
+				require.NoError(t, err)
+
+				cl = http.Client{
+					Transport: &http.Transport{
+						Dial: func(network, addr string) (net.Conn, error) { return conn, nil },
+					},
+				}
+				_, err = cl.Get("http://randomdomain.boundary/")
+				require.NoError(t, err)
+				require.NoError(t, conn.Close())
+			},
+		},
+		{
+			name: "one api (tls), one cluster, one ops listener (tls)",
+			setup: func(t *testing.T) {
+				testApiTlsSetup(t, "./boundary-startlistenerstest0.cert", "./boundary-startlistenerstest0.key")(t)
+				testApiTlsSetup(t, "./boundary-startlistenerstest1.cert", "./boundary-startlistenerstest1.key")(t)
+			},
+			listeners: []*listenerutil.ListenerConfig{
+				{
+					Type:        "tcp",
+					Purpose:     []string{"api"},
+					Address:     "127.0.0.1:0",
+					TLSCertFile: "./boundary-startlistenerstest0.cert",
+					TLSKeyFile:  "./boundary-startlistenerstest0.key",
+				},
+				{
+					Type:    "tcp",
+					Purpose: []string{"cluster"},
+					Address: "127.0.0.1:0",
+				},
+				{
+					Type:        "tcp",
+					Purpose:     []string{"ops"},
+					Address:     "127.0.0.1:0",
+					TLSCertFile: "./boundary-startlistenerstest1.cert",
+					TLSKeyFile:  "./boundary-startlistenerstest1.key",
+				},
+			},
+			assertions: func(t *testing.T, c *Controller, apiAddrs, opsAddrs []string, clusterAddr string) {
+				client := testTlsHttpClient(t, "./boundary-startlistenerstest0.cert")
+				rsp, err := client.Get("https://" + apiAddrs[0] + "/v1/auth-methods?scope_id=global")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+				clusterGrpcDialNoError(t, c, "tcp", clusterAddr)
+
+				client = testTlsHttpClient(t, "./boundary-startlistenerstest1.cert")
+				_, err = client.Get("https://" + opsAddrs[0])
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "multiple api, one cluster, multiple ops listeners",
+			listeners: []*listenerutil.ListenerConfig{
+				{
+					Type:       "tcp",
+					Purpose:    []string{"api"},
+					Address:    "127.0.0.1:0",
+					TLSDisable: true,
+				},
+				{
+					Type:       "tcp",
+					Purpose:    []string{"api"},
+					Address:    "127.0.0.1:0",
+					TLSDisable: true,
+				},
+				{
+					Type:    "tcp",
+					Purpose: []string{"cluster"},
+					Address: "127.0.0.1:0",
+				},
+				{
+					Type:       "tcp",
+					Purpose:    []string{"ops"},
+					Address:    "127.0.0.1:0",
+					TLSDisable: true,
+				},
+				{
+					Type:       "tcp",
+					Purpose:    []string{"ops"},
+					Address:    "127.0.0.1:0",
+					TLSDisable: true,
+				},
+			},
+			assertions: func(t *testing.T, c *Controller, apiAddrs, opsAddrs []string, clusterAddr string) {
+				rsp, err := http.Get("http://" + apiAddrs[0] + "/v1/auth-methods?scope_id=global")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+				rsp, err = http.Get("http://" + apiAddrs[1] + "/v1/auth-methods?scope_id=global")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+				clusterGrpcDialNoError(t, c, "tcp", clusterAddr)
+
+				_, err = http.Get("http://" + opsAddrs[0])
+				require.NoError(t, err)
+
+				_, err = http.Get("http://" + opsAddrs[1])
+				require.NoError(t, err)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -242,7 +416,7 @@ func TestStartListeners(t *testing.T) {
 			conf := TestControllerConfig(t, ctx, tc, nil)
 			conf.RawConfig.SharedConfig = &configutil.SharedConfig{Listeners: tt.listeners, DisableMlock: true}
 
-			err := conf.SetupListeners(nil, conf.RawConfig.SharedConfig, []string{"api", "cluster"})
+			err := conf.SetupListeners(nil, conf.RawConfig.SharedConfig, []string{"api", "cluster", "ops"})
 			require.NoError(t, err)
 
 			c, err := New(ctx, conf)
@@ -258,7 +432,67 @@ func TestStartListeners(t *testing.T) {
 			for _, l := range c.apiListeners {
 				apiAddrs = append(apiAddrs, l.Mux.Addr().String())
 			}
-			tt.assertions(t, c, apiAddrs, c.clusterListener.Mux.Addr().String())
+			opsAddrs := make([]string, 0)
+			for _, l := range c.opsListeners {
+				opsAddrs = append(opsAddrs, l.Mux.Addr().String())
+			}
+			tt.assertions(t, c, apiAddrs, opsAddrs, c.clusterListener.Mux.Addr().String())
+		})
+	}
+}
+
+func TestWaitIfOpsListenersExist(t *testing.T) {
+	tests := []struct {
+		name         string
+		gracePeriod  time.Duration
+		opsListeners []*base.ServerListener
+		expMinWait   time.Duration
+		expMaxWait   time.Duration
+	}{
+		{
+			name:       "no ops listeners",
+			expMinWait: 0 * time.Second,
+			expMaxWait: 500 * time.Microsecond,
+		},
+		{
+			name:        "no ops listeners with grace period set",
+			gracePeriod: 10 * time.Second,
+			expMinWait:  0 * time.Second,
+			expMaxWait:  500 * time.Microsecond,
+		},
+		{
+			name:         "ops listeners with no grace period set",
+			opsListeners: []*base.ServerListener{{}, {}},
+			expMinWait:   0 * time.Second,
+			expMaxWait:   500 * time.Microsecond,
+		},
+		{
+			name:         "ops listeners with grace period set",
+			gracePeriod:  500 * time.Millisecond,
+			opsListeners: []*base.ServerListener{{}, {}},
+			expMinWait:   500 * time.Millisecond,
+			expMaxWait:   600 * time.Millisecond,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Controller{
+				opsListeners: tt.opsListeners,
+				conf: &Config{
+					RawConfig: &config.Config{
+						Controller: &config.Controller{
+							OpsListenersGracePeriodDuration: tt.gracePeriod,
+						},
+					},
+				},
+			}
+
+			start := time.Now()
+			c.waitIfOpsListenersExist()
+
+			actualWait := time.Since(start)
+			require.GreaterOrEqual(t, actualWait, tt.expMinWait)
+			require.LessOrEqual(t, actualWait, tt.expMaxWait)
 		})
 	}
 }
@@ -499,6 +733,148 @@ func TestStopHttpServersAndListeners(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := tt.controllerFn(t)
 			err := c.stopHttpServersAndListeners()
+			if tt.expErr {
+				require.EqualError(t, err, tt.expErrStr)
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.assertions != nil {
+				tt.assertions(t, c)
+			}
+		})
+	}
+}
+
+func TestStopOpsServersAndListeners(t *testing.T) {
+	tests := []struct {
+		name         string
+		controllerFn func(t *testing.T) *Controller
+		assertions   func(t *testing.T, c *Controller)
+		expErr       bool
+		expErrStr    string
+	}{
+		{
+			name: "no listeners",
+			controllerFn: func(t *testing.T) *Controller {
+				return &Controller{
+					opsListeners: []*base.ServerListener{},
+				}
+			},
+			expErr: false,
+		},
+		{
+			name: "nil listeners",
+			controllerFn: func(t *testing.T) *Controller {
+				return &Controller{
+					opsListeners: nil,
+				}
+			},
+			expErr: false,
+		},
+		{
+			name: "listeners with nil http server",
+			controllerFn: func(t *testing.T) *Controller {
+				return &Controller{
+					opsListeners: []*base.ServerListener{
+						{HTTPServer: nil},
+						{HTTPServer: nil},
+						{HTTPServer: nil},
+					},
+				}
+			},
+			expErr: false,
+		},
+		{
+			name: "listener already closed",
+			controllerFn: func(t *testing.T) *Controller {
+				l1, err := net.Listen("tcp", "127.0.0.1:0")
+				require.NoError(t, err)
+				require.NoError(t, l1.Close())
+
+				s1 := &http.Server{}
+				return &Controller{
+					baseContext: context.Background(),
+					opsListeners: []*base.ServerListener{
+						{
+							ALPNListener: l1,
+							HTTPServer:   s1,
+							Mux:          alpnmux.New(l1),
+							Config:       &listenerutil.ListenerConfig{Type: "tcp"},
+						},
+					},
+				}
+			},
+			assertions: func(t *testing.T, c *Controller) {
+				// Asserts the HTTP Servers are closed.
+				require.ErrorIs(t, c.opsListeners[0].HTTPServer.Serve(c.opsListeners[0].ALPNListener), http.ErrServerClosed)
+
+				// Asserts the underlying listeners are closed.
+				require.ErrorIs(t, c.opsListeners[0].Mux.Close(), net.ErrClosed)
+			},
+			expErr: false,
+		},
+		{
+			name: "multiple listeners",
+			controllerFn: func(t *testing.T) *Controller {
+				l1, err := net.Listen("tcp", "127.0.0.1:0")
+				require.NoError(t, err)
+				l2, err := net.Listen("unix", "/tmp/boundary-controller-TestStopOpsServersAndListeners-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+				require.NoError(t, err)
+
+				s1 := &http.Server{}
+				s2 := &http.Server{}
+
+				go s1.Serve(l1)
+				go s2.Serve(l2)
+
+				// Make sure they're up
+				_, err = http.Get("http://" + l1.Addr().String())
+				require.NoError(t, err)
+
+				c := http.Client{Transport: &http.Transport{
+					Dial: func(network, addr string) (net.Conn, error) {
+						return net.Dial("unix", l2.Addr().String())
+					},
+				}}
+				_, err = c.Get("http://random.domain")
+				require.NoError(t, err)
+
+				return &Controller{
+					baseContext: context.Background(),
+					opsListeners: []*base.ServerListener{
+						{
+							ALPNListener: l1,
+							HTTPServer:   s1,
+							Mux:          alpnmux.New(l1),
+							Config:       &listenerutil.ListenerConfig{Type: "tcp"},
+						},
+						{
+							ALPNListener: l2,
+							HTTPServer:   s2,
+							Mux:          alpnmux.New(l2),
+							Config:       &listenerutil.ListenerConfig{Type: "tcp"},
+						},
+					},
+				}
+			},
+			assertions: func(t *testing.T, c *Controller) {
+				// Asserts the HTTP Servers are closed.
+				require.ErrorIs(t, c.opsListeners[0].HTTPServer.Serve(c.opsListeners[0].ALPNListener), http.ErrServerClosed)
+				require.ErrorIs(t, c.opsListeners[1].HTTPServer.Serve(c.opsListeners[1].ALPNListener), http.ErrServerClosed)
+
+				// Asserts the underlying listeners are closed.
+				require.ErrorIs(t, c.opsListeners[0].Mux.Close(), net.ErrClosed)
+				require.ErrorIs(t, c.opsListeners[1].Mux.Close(), net.ErrClosed)
+			},
+			expErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := tt.controllerFn(t)
+			err := c.stopOpsServersAndListeners()
 			if tt.expErr {
 				require.EqualError(t, err, tt.expErrStr)
 				return

@@ -56,6 +56,15 @@ func (c *Controller) startListeners() error {
 	}
 	servers = append(servers, clusterServer)
 
+	for i := range c.opsListeners {
+		ln := c.opsListeners[i]
+		opsServers, err := c.configureForOps(ln)
+		if err != nil {
+			return fmt.Errorf("failed to configure listener for ops mode: %w", err)
+		}
+		servers = append(servers, opsServers...)
+	}
+
 	for _, s := range servers {
 		s()
 	}
@@ -160,11 +169,76 @@ func (c *Controller) configureForCluster(ln *base.ServerListener) (func(), error
 	return func() { go ln.GrpcServer.Serve(ln.ALPNListener) }, nil
 }
 
+func (c *Controller) configureForOps(ln *base.ServerListener) ([]func(), error) {
+	h, err := c.opsHandler(HandlerProperties{
+		ListenerConfig: ln.Config,
+		CancelCtx:      c.baseContext,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cancelCtx := c.baseContext // Resolve to avoid race conditions if the base context is replaced.
+	server := &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       5 * time.Minute,
+		ErrorLog:          c.logger.StandardLogger(nil),
+		BaseContext:       func(net.Listener) context.Context { return cancelCtx },
+	}
+	ln.HTTPServer = server
+
+	if ln.Config.HTTPReadHeaderTimeout > 0 {
+		server.ReadHeaderTimeout = ln.Config.HTTPReadHeaderTimeout
+	}
+	if ln.Config.HTTPReadTimeout > 0 {
+		server.ReadTimeout = ln.Config.HTTPReadTimeout
+	}
+	if ln.Config.HTTPWriteTimeout > 0 {
+		server.WriteTimeout = ln.Config.HTTPWriteTimeout
+	}
+	if ln.Config.HTTPIdleTimeout > 0 {
+		server.IdleTimeout = ln.Config.HTTPIdleTimeout
+	}
+
+	servers := make([]func(), 0)
+	switch ln.Config.TLSDisable {
+	case true:
+		l, err := ln.Mux.RegisterProto(alpnmux.NoProto, nil)
+		if err != nil {
+			return nil, fmt.Errorf("error getting non-tls listener: %w", err)
+		}
+		if l == nil {
+			return nil, errors.New("could not get non-tls listener")
+		}
+		servers = append(servers, func() {
+			go server.Serve(l)
+		})
+
+	default:
+		for _, v := range []string{"", "http/1.1", "h2"} {
+			l := ln.Mux.GetListener(v)
+			if l == nil {
+				return nil, fmt.Errorf("could not get tls proto %q listener", v)
+			}
+			servers = append(servers, func() {
+				go server.Serve(l)
+			})
+		}
+	}
+
+	return servers, nil
+}
+
 func (c *Controller) stopServersAndListeners() error {
+	c.waitIfOpsListenersExist()
+
 	var mg multierror.Group
 	mg.Go(c.stopClusterGrpcServerAndListener)
 	mg.Go(c.stopHttpServersAndListeners)
 	mg.Go(c.stopApiGrpcServerAndListener)
+	mg.Go(c.stopOpsServersAndListeners)
 
 	stopErrors := mg.Wait()
 
@@ -174,6 +248,16 @@ func (c *Controller) stopServersAndListeners() error {
 	}
 
 	return stopErrors.ErrorOrNil()
+}
+
+func (c *Controller) waitIfOpsListenersExist() {
+	if len(c.opsListeners) == 0 {
+		return
+	}
+
+	// If we have ops listeners, we wait for a configurable amount of time before shutting down.
+	// This is a special property of `ops` listeners because they expose the health endpoint.
+	<-time.After(c.conf.RawConfig.Controller.OpsListenersGracePeriodDuration)
 }
 
 func (c *Controller) stopClusterGrpcServerAndListener() error {
@@ -203,6 +287,25 @@ func (c *Controller) stopHttpServersAndListeners() error {
 		ctx, cancel := context.WithTimeout(c.baseContext, ln.Config.MaxRequestDuration)
 		ln.HTTPServer.Shutdown(ctx)
 		cancel()
+
+		err := ln.Mux.Close() // The HTTP Shutdown call should close this, but just in case.
+		err = listenerCloseErrorCheck(ln.Config.Type, err)
+		if err != nil {
+			multierror.Append(closeErrors, err)
+		}
+	}
+
+	return closeErrors.ErrorOrNil()
+}
+
+func (c *Controller) stopOpsServersAndListeners() error {
+	var closeErrors *multierror.Error
+	for i := range c.opsListeners {
+		ln := c.opsListeners[i]
+		if ln.HTTPServer == nil {
+			continue
+		}
+		ln.HTTPServer.Shutdown(c.baseContext)
 
 		err := ln.Mux.Close() // The HTTP Shutdown call should close this, but just in case.
 		err = listenerCloseErrorCheck(ln.Config.Type, err)

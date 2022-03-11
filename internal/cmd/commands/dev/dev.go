@@ -62,6 +62,7 @@ type Command struct {
 	flagTargetSessionConnectionLimit int
 	flagControllerAPIListenAddr      string
 	flagControllerClusterListenAddr  string
+	flagControllerOpsListenAddr      string
 	flagControllerPublicClusterAddr  string
 	flagControllerOnly               bool
 	flagWorkerAuthKey                string
@@ -211,6 +212,12 @@ func (c *Command) Flags() *base.FlagSets {
 		Target: &c.flagControllerPublicClusterAddr,
 		EnvVar: "BOUNDARY_DEV_CONTROLLER_PUBLIC_CLUSTER_ADDRESS",
 		Usage:  "Public address at which the controller is reachable for cluster tasks (like worker connections).",
+	})
+	f.StringVar(&base.StringVar{
+		Name:   "ops-listen-address",
+		Target: &c.flagControllerOpsListenAddr,
+		EnvVar: "BOUNDARY_DEV_CONTROLLER_OPS_LISTEN_ADDRESS",
+		Usage:  "Address to bind to for controller \"ops\" purpose. If this begins with a forward slash, it will be assumed to be a Unix domain socket path.",
 	})
 
 	f.BoolVar(&base.BoolVar{
@@ -449,6 +456,14 @@ func (c *Command) Run(args []string) int {
 				l.Type = "unix"
 			}
 
+		case "ops":
+			if c.flagControllerOpsListenAddr != "" {
+				l.Address = c.flagControllerOpsListenAddr
+			}
+			if strings.HasPrefix(l.Address, "/") {
+				l.Type = "unix"
+			}
+
 		case "proxy":
 			if c.flagWorkerProxyListenAddr != "" {
 				l.Address = c.flagWorkerProxyListenAddr
@@ -541,7 +556,7 @@ func (c *Command) Run(args []string) int {
 	c.Info["[Recovery] AEAD Key Bytes"] = c.Config.DevRecoveryKey
 
 	// Initialize the listeners
-	if err := c.SetupListeners(c.UI, c.Config.SharedConfig, []string{"api", "cluster", "proxy"}); err != nil {
+	if err := c.SetupListeners(c.UI, c.Config.SharedConfig, []string{"api", "cluster", "proxy", "ops"}); err != nil {
 		c.UI.Error(err.Error())
 		return base.CommandUserError
 	}

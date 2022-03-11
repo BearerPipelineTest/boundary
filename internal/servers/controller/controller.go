@@ -51,6 +51,7 @@ type Controller struct {
 	workerAuthCache *sync.Map
 
 	apiListeners    []*base.ServerListener
+	opsListeners    []*base.ServerListener
 	clusterListener *base.ServerListener
 
 	// Used for testing and tracking worker health
@@ -94,6 +95,8 @@ func New(ctx context.Context, conf *Config) (*Controller, error) {
 		workerAuthCache:         new(sync.Map),
 		workerStatusUpdateTimes: new(sync.Map),
 		enabledPlugins:          conf.Server.EnabledPlugins,
+		apiListeners:            make([]*base.ServerListener, 0),
+		opsListeners:            make([]*base.ServerListener, 0),
 	}
 
 	c.started.Store(false)
@@ -141,6 +144,8 @@ func New(ctx context.Context, conf *Config) (*Controller, error) {
 			c.apiListeners = append(c.apiListeners, l)
 		case "cluster":
 			clusterListeners = append(clusterListeners, l)
+		case "ops":
+			c.opsListeners = append(c.opsListeners, l)
 		}
 	}
 	if len(c.apiListeners) == 0 {
@@ -347,10 +352,10 @@ func (c *Controller) Shutdown() error {
 		event.WriteSysEvent(context.TODO(), op, "already shut down, skipping")
 	}
 	defer c.started.Store(false)
-	c.baseCancel()
 	if err := c.stopServersAndListeners(); err != nil {
 		return fmt.Errorf("error stopping controller servers and listeners: %w", err)
 	}
+	c.baseCancel()
 	c.schedulerWg.Wait()
 	c.tickerWg.Wait()
 	if c.conf.Eventer != nil {
