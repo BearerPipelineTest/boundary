@@ -32,7 +32,7 @@ func (c *Controller) startListeners() error {
 	c.apiGrpcServer = grpcServer
 	c.apiGrpcGatewayTicket = gwTicket
 
-	err = c.registerGrpcServices(c.baseContext, c.apiGrpcServer)
+	err = c.registerGrpcServices(c.apiGrpcServer)
 	if err != nil {
 		return fmt.Errorf("failed to register grpc services: %w", err)
 	}

@@ -74,7 +74,7 @@ func (c *Controller) apiHandler(props HandlerProperties) (http.Handler, error) {
 	return eventsHandler, err
 }
 
-func (c *Controller) registerGrpcServices(ctx context.Context, s *grpc.Server) error {
+func (c *Controller) registerGrpcServices(s *grpc.Server) error {
 	// We have to check against the current services because the gRPC lib treats a duplicate
 	// register call as an error and os.Exits.
 	currentServices := s.GetServiceInfo()
@@ -137,7 +137,7 @@ func (c *Controller) registerGrpcServices(ctx context.Context, s *grpc.Server) e
 	}
 	if _, ok := currentServices[services.TargetService_ServiceDesc.ServiceName]; !ok {
 		ts, err := targets.NewService(
-			ctx,
+			c.baseContext,
 			c.kms,
 			c.TargetRepoFn,
 			c.IamRepoFn,
