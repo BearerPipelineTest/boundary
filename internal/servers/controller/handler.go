@@ -79,6 +79,13 @@ func (c *Controller) apiHandler(props HandlerProperties) (http.Handler, error) {
 func (c *Controller) opsHandler(props HandlerProperties) (http.Handler, error) {
 	mux := http.NewServeMux()
 
+	healthGrpcGwMux := newGrpcGatewayMux()
+	err := registerHealthGrpcGatewayEndpoint(c.baseContext, healthGrpcGwMux, gatewayDialOptions(c.apiGrpcServerListener)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register health service handler: %w", err)
+	}
+	mux.Handle("/health", healthGrpcGwMux)
+
 	wrappedHandler := wrapHandlerWithCors(mux, props)
 	wrappedHandler = wrapHandlerWithCommonFuncs(wrappedHandler, c, props)
 	wrappedHandler = cleanhttp.PrintablePathCheckHandler(wrappedHandler, nil)
@@ -214,6 +221,10 @@ func (c *Controller) registerGrpcServices(ctx context.Context, s *grpc.Server) e
 	}
 
 	return nil
+}
+
+func registerHealthGrpcGatewayEndpoint(ctx context.Context, gwMux *runtime.ServeMux, dialOptions ...grpc.DialOption) error {
+	return opsservices.RegisterHealthServiceHandlerFromEndpoint(ctx, gwMux, gatewayTarget, dialOptions)
 }
 
 func registerGrpcGatewayEndpoints(ctx context.Context, gwMux *runtime.ServeMux, dialOptions ...grpc.DialOption) error {

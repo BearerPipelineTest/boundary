@@ -257,6 +257,7 @@ func (c *Controller) waitIfOpsListenersExist() {
 
 	// If we have ops listeners, we wait for a configurable amount of time before shutting down.
 	// This is a special property of `ops` listeners because they expose the health endpoint.
+	c.startServiceUnavailableReplies()
 	<-time.After(c.conf.RawConfig.Controller.OpsListenersGracePeriodDuration)
 }
 

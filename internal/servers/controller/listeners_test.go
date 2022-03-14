@@ -441,13 +441,124 @@ func TestStartListeners(t *testing.T) {
 	}
 }
 
+func TestConfigureForOps(t *testing.T) {
+	tests := []struct {
+		name               string
+		setupApiGrpcServer bool
+		listener           *listenerutil.ListenerConfig
+		expErr             bool
+		expErrMsg          string
+		assertions         func(t *testing.T, c *Controller)
+	}{
+		{
+			name:               "http 200 OK from /health",
+			setupApiGrpcServer: true,
+			listener: &listenerutil.ListenerConfig{
+				Type:       "tcp",
+				Address:    "127.0.0.1:0",
+				Purpose:    []string{"ops"},
+				TLSDisable: true,
+			},
+			expErr: false,
+			assertions: func(t *testing.T, c *Controller) {
+				rsp, err := http.Get("http://" + c.opsListeners[0].Mux.Addr().String() + "/health")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+			},
+		},
+		{
+			name:               "http 503 from /health when Controller is in shutdown",
+			setupApiGrpcServer: true,
+			listener: &listenerutil.ListenerConfig{
+				Type:       "tcp",
+				Address:    "127.0.0.1:0",
+				Purpose:    []string{"ops"},
+				TLSDisable: true,
+			},
+			expErr: false,
+			assertions: func(t *testing.T, c *Controller) {
+				rsp, err := http.Get("http://" + c.opsListeners[0].Mux.Addr().String() + "/health")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rsp.StatusCode)
+
+				c.startServiceUnavailableReplies() // Start replying with 503s
+
+				rsp, err = http.Get("http://" + c.opsListeners[0].Mux.Addr().String() + "/health")
+				require.NoError(t, err)
+				require.Equal(t, http.StatusServiceUnavailable, rsp.StatusCode)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+
+			tc := &TestController{t: t, ctx: ctx, cancel: cancel, opts: &TestControllerOpts{}}
+			t.Cleanup(tc.Shutdown)
+
+			requiredListeners := []*listenerutil.ListenerConfig{
+				// We need these to start a Controller, even though
+				// we don't need them for this particular test.
+				{
+					Type:       "tcp",
+					Address:    "127.0.0.1:0",
+					Purpose:    []string{"api"},
+					TLSDisable: true,
+				},
+				{
+					Type:    "tcp",
+					Address: "127.0.0.1:0",
+					Purpose: []string{"cluster"},
+				},
+			}
+			listenerSet := append(requiredListeners, tt.listener)
+
+			conf := TestControllerConfig(t, ctx, tc, nil)
+			conf.RawConfig.SharedConfig = &configutil.SharedConfig{Listeners: listenerSet, DisableMlock: true}
+
+			err := conf.SetupListeners(nil, conf.RawConfig.SharedConfig, []string{"api", "cluster", "ops"})
+			require.NoError(t, err)
+
+			c, err := New(ctx, conf)
+			require.NoError(t, err)
+
+			c.baseContext = ctx
+			c.baseCancel = cancel
+
+			if tt.setupApiGrpcServer {
+				c.apiGrpcServer = grpc.NewServer()
+				c.apiGrpcServerListener = newGrpcServerListener()
+				c.registerGrpcHealthService(c.apiGrpcServer)
+
+				go c.apiGrpcServer.Serve(c.apiGrpcServerListener)
+				t.Cleanup(c.apiGrpcServer.GracefulStop)
+			}
+
+			funcs, err := c.configureForOps(c.opsListeners[0])
+			if tt.expErr {
+				require.EqualError(t, err, tt.expErrMsg)
+				require.Nil(t, funcs)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotPanics(t, func() { funcs[0]() })
+			if tt.assertions != nil {
+				tt.assertions(t, c)
+			}
+		})
+	}
+}
+
 func TestWaitIfOpsListenersExist(t *testing.T) {
 	tests := []struct {
-		name         string
-		gracePeriod  time.Duration
-		opsListeners []*base.ServerListener
-		expMinWait   time.Duration
-		expMaxWait   time.Duration
+		name                              string
+		gracePeriod                       time.Duration
+		requireServiceUnavailableFuncCall bool
+		opsListeners                      []*base.ServerListener
+		expMinWait                        time.Duration
+		expMaxWait                        time.Duration
 	}{
 		{
 			name:       "no ops listeners",
@@ -461,23 +572,27 @@ func TestWaitIfOpsListenersExist(t *testing.T) {
 			expMaxWait:  500 * time.Microsecond,
 		},
 		{
-			name:         "ops listeners with no grace period set",
-			opsListeners: []*base.ServerListener{{}, {}},
-			expMinWait:   0 * time.Second,
-			expMaxWait:   500 * time.Microsecond,
+			name:                              "ops listeners with no grace period set",
+			opsListeners:                      []*base.ServerListener{{}, {}},
+			requireServiceUnavailableFuncCall: true,
+			expMinWait:                        0 * time.Second,
+			expMaxWait:                        500 * time.Microsecond,
 		},
 		{
-			name:         "ops listeners with grace period set",
-			gracePeriod:  500 * time.Millisecond,
-			opsListeners: []*base.ServerListener{{}, {}},
-			expMinWait:   500 * time.Millisecond,
-			expMaxWait:   600 * time.Millisecond,
+			name:                              "ops listeners with grace period set",
+			requireServiceUnavailableFuncCall: true,
+			gracePeriod:                       500 * time.Millisecond,
+			opsListeners:                      []*base.ServerListener{{}, {}},
+			expMinWait:                        500 * time.Millisecond,
+			expMaxWait:                        600 * time.Millisecond,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			serviceUnavailableFuncCalled := false
 			c := Controller{
-				opsListeners: tt.opsListeners,
+				startServiceUnavailableReplies: func() { serviceUnavailableFuncCalled = true },
+				opsListeners:                   tt.opsListeners,
 				conf: &Config{
 					RawConfig: &config.Config{
 						Controller: &config.Controller{
@@ -493,6 +608,9 @@ func TestWaitIfOpsListenersExist(t *testing.T) {
 			actualWait := time.Since(start)
 			require.GreaterOrEqual(t, actualWait, tt.expMinWait)
 			require.LessOrEqual(t, actualWait, tt.expMaxWait)
+			if tt.requireServiceUnavailableFuncCall {
+				require.True(t, serviceUnavailableFuncCalled)
+			}
 		})
 	}
 }
