@@ -61,9 +61,17 @@ description will be read.
 - `auth_token_time_to_live` - Maximum time to live (TTL) for all auth tokens globally (pertains
   to all tokens from all auth methods). Valid time units are anything specified by Golang's
   [ParseDuration()](https://golang.org/pkg/time/#ParseDuration) method. Default is 7 days.
+
 - `auth_token_time_to_stale` - Maximum time of inactivity for all auth tokens globally (pertains
   to all tokens from all auth methods). Valid time units are anything specified by Golang's
   [ParseDuration()](https://golang.org/pkg/time/#ParseDuration) method. Default is 1 day.
+
+- `ops_listeners_grace_period` - Amount of time Boundary will wait before initiating the shutdown procedure,
+  after receiving a shutdown signal. In this state, Boundary still processes requests as normal but replies 
+  with `503 Service Unavailable` to any health requests. This is designed to allow an operator to configure
+  load-balancers to preemptively stop new traffic to a Boundary instance that is going away. Valid time units
+  are anything specified by Go's [ParseDuration()](https://golang.org/pkg/time/#ParseDuration) method. Only
+  used when an `ops` listener is set. Default is 0 seconds.
 
 ## KMS Configuration
 
@@ -130,6 +138,9 @@ controller {
   name = "demo-controller-1"
   description = "A controller for a demo!"
 
+  # After receiving a shutdown signal, Boundary will wait 10s before initiating the shutdown process.
+  ops_listeners_grace_period = 10s
+
   # Database URL for postgres. This can be a direct "postgres://"
   # URL, or it can be "file://" to read the contents of a file to
   # supply the url, or "env://" to name an environment variable
@@ -164,7 +175,7 @@ listener "tcp" {
 
 listener "tcp" {
   # Should be the address of the NIC where your external systems'
-  (eg: Load-Balancer) will connect on.
+  # (eg: Load-Balancer) will connect on.
   address = "10.0.0.1"
   # The purpose of this listener block
   purpose = "ops"
