@@ -162,6 +162,16 @@ listener "tcp" {
   purpose = "cluster"
 }
 
+listener "tcp" {
+  # Should be the address of the NIC where your external systems'
+  (eg: Load-Balancer) will connect on.
+  address = "10.0.0.1"
+  # The purpose of this listener block
+  purpose = "ops"
+
+  tls_disable = false
+}
+
 # Root KMS configuration block: this is the root key for Boundary
 # Use a production KMS such as AWS KMS in production installs
 kms "aead" {

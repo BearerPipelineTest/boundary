@@ -9,7 +9,30 @@ description: |-
 # `listener` Stanza
 
 The `listener` stanza configures the addresses and ports on which Boundary will
-respond to requests. At this time, there are two listeners - [TCP][tcp] and [Unix][unix].
+respond to requests. At this time, there are two listeners:
+[TCP][/docs/configuration/listener/tcp] and [Unix][/docs/configuration/listener/unix].
 
-[tcp]: /docs/configuration/listener/tcp
-[unix]: /docs/configuration/listener/unix
+
+## `listener` Purpose
+
+The `purpose` field is used to determine what part of Boundary's functionality is
+started and exposed for a given listener block. Each listener must have a `purpose` set.
+
+Currently, Boundary recognizes the following listener purposes:
+
+- `api`: Starts up and exposes Boundary's controller API.
+  At least one `api` listener must be present if a `cluster`
+  purpose listener is present. By default, it runs on `:9200`.
+
+- `cluster`: Starts up and exposes Boundary's worker and
+  controller communication layer. Only one `cluster` listener
+  is allowed per Boundary instance. Must be present if an `api`
+  purpose listener is present. By default, it runs on `:9201`.
+
+- `proxy`: Starts up a Boundary Worker. By default, it runs
+on `:9202`.
+
+- `ops`: Starts up and exposes Boundary's operational
+endpoints (eg: /health). By default, it runs on `:9203`.
+
+

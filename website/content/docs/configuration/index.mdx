@@ -30,10 +30,9 @@ After the configuration is written, use the `-config` flag to specify a local pa
 - [`listener`](/docs/configuration/listener): Configures the listeners on which
   Boundary serves traffic (API, cluster, and proxy).
 
-  Controllers will have two listener blocks: one marked for `api` purpose and
-  the other marked for `cluster` purpose. By default, the API listener runs on
-  :9200 and the cluster listener (currently used for worker communication) uses
-  :9201.
+  Controllers must have at least two listener blocks defined: one marked for
+  `api` purpose and the other marked for `cluster` purpose. 
+  Optionally, Controllers can have an `ops` purpose listener block.
 
   Workers will have only one listener, marked for `proxy` purpose.
 
